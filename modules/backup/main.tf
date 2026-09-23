@@ -1,102 +1,74 @@
-# AWS Backup: one encrypted vault, a daily plan, and tag-based selection.
-# Anything tagged Backup=daily is covered: the RDS instance (tagged in the data module)
-# and every EBS volume created by the gp3 StorageClass (tagged via the CSI driver).
+# Daily backups of mutable storage outside the database.
+#
+# AWS Backup is blocked in this account by an organization SCP, so:
+#   - EBS volumes (every Kubernetes PV from the gp3 StorageClass): Data Lifecycle Manager
+#     snapshots, selected by tag.
+#   - RDS: native automated backups (daily snapshot + point-in-time recovery),
+#     configured in the data module. Failures alert through the RDS event subscription below.
 
-resource "aws_kms_key" "backup" {
-  description         = "${var.name} AWS Backup vault"
-  enable_key_rotation = true
-  tags                = var.tags
-}
-
-resource "aws_kms_alias" "backup" {
-  name          = "alias/${var.name}-backup"
-  target_key_id = aws_kms_key.backup.key_id
-}
-
-resource "aws_backup_vault" "this" {
-  name          = "${var.name}-vault"
-  kms_key_arn   = aws_kms_key.backup.arn
-  force_destroy = !var.protect_recovery_points
-  tags          = var.tags
-}
-
-resource "aws_backup_plan" "daily" {
-  name = "${var.name}-daily"
-
-  rule {
-    rule_name         = "daily"
-    target_vault_name = aws_backup_vault.this.name
-    schedule          = "cron(0 5 * * ? *)" # 05:00 UTC, after the RDS automated backup window
-    start_window      = 60
-    completion_window = 180
-
-    lifecycle {
-      delete_after = var.daily_retention_days
+data "aws_iam_policy_document" "dlm_assume" {
+  statement {
+    actions = ["sts:AssumeRole"]
+    principals {
+      type        = "Service"
+      identifiers = ["dlm.amazonaws.com"]
     }
-
-    recovery_point_tags = var.tags
   }
+}
 
-  rule {
-    rule_name         = "weekly"
-    target_vault_name = aws_backup_vault.this.name
-    schedule          = "cron(0 6 ? * SUN *)"
+resource "aws_iam_role" "dlm" {
+  name               = "${var.name}-dlm"
+  assume_role_policy = data.aws_iam_policy_document.dlm_assume.json
+  tags               = var.tags
+}
 
-    lifecycle {
-      delete_after = var.weekly_retention_days
+resource "aws_iam_role_policy_attachment" "dlm" {
+  role       = aws_iam_role.dlm.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSDataLifecycleManagerServiceRole"
+}
+
+resource "aws_dlm_lifecycle_policy" "ebs" {
+  description        = "${var.name} daily and weekly EBS snapshots of Kubernetes volumes" # [A-Za-z0-9 _-] only
+  execution_role_arn = aws_iam_role.dlm.arn
+  state              = "ENABLED"
+
+  policy_details {
+    resource_types = ["VOLUME"]
+    target_tags    = { (var.target_tag_key) = var.target_tag_value }
+
+    schedule {
+      name      = "daily"
+      copy_tags = true
+      create_rule {
+        interval      = 24
+        interval_unit = "HOURS"
+        times         = ["05:00"]
+      }
+      retain_rule {
+        count = var.daily_retention_count
+      }
+      tags_to_add = { SnapshotSchedule = "daily" }
     }
 
-    recovery_point_tags = var.tags
+    schedule {
+      name      = "weekly"
+      copy_tags = true
+      create_rule {
+        cron_expression = "cron(0 6 ? * SUN *)"
+      }
+      retain_rule {
+        count = var.weekly_retention_count
+      }
+      tags_to_add = { SnapshotSchedule = "weekly" }
+    }
   }
 
   tags = var.tags
 }
 
-data "aws_iam_policy_document" "backup_assume" {
-  statement {
-    actions = ["sts:AssumeRole"]
-    principals {
-      type        = "Service"
-      identifiers = ["backup.amazonaws.com"]
-    }
-  }
-}
-
-resource "aws_iam_role" "backup" {
-  name               = "${var.name}-backup"
-  assume_role_policy = data.aws_iam_policy_document.backup_assume.json
-  tags               = var.tags
-}
-
-resource "aws_iam_role_policy_attachment" "backup" {
-  for_each = toset([
-    "arn:aws:iam::aws:policy/service-role/AWSBackupServiceRolePolicyForBackup",
-    "arn:aws:iam::aws:policy/service-role/AWSBackupServiceRolePolicyForRestores",
-  ])
-  role       = aws_iam_role.backup.name
-  policy_arn = each.value
-}
-
-resource "aws_backup_selection" "tagged" {
-  name         = "${var.name}-tagged"
-  plan_id      = aws_backup_plan.daily.id
-  iam_role_arn = aws_iam_role.backup.arn
-  resources    = ["*"]
-
-  condition {
-    string_equals {
-      key   = "aws:ResourceTag/Backup"
-      value = "daily"
-    }
-    string_equals {
-      key   = "aws:ResourceTag/Project"
-      value = var.project
-    }
-  }
-}
-
-# Alert when a backup job fails.
-# Not encrypted with the AWS-managed SNS key: AWS Backup can't publish to topics using it.
+# ---------------------------------------------------------------------------
+# Alerting: DLM policy errors and RDS backup failures -> SNS.
+# ---------------------------------------------------------------------------
 resource "aws_sns_topic" "backup_events" {
   name = "${var.name}-backup-events"
   tags = var.tags
@@ -108,7 +80,7 @@ data "aws_iam_policy_document" "backup_events" {
     resources = [aws_sns_topic.backup_events.arn]
     principals {
       type        = "Service"
-      identifiers = ["backup.amazonaws.com"]
+      identifiers = ["events.amazonaws.com", "rds.amazonaws.com"]
     }
   }
 }
@@ -118,10 +90,30 @@ resource "aws_sns_topic_policy" "backup_events" {
   policy = data.aws_iam_policy_document.backup_events.json
 }
 
-resource "aws_backup_vault_notifications" "this" {
-  backup_vault_name   = aws_backup_vault.this.name
-  sns_topic_arn       = aws_sns_topic.backup_events.arn
-  backup_vault_events = ["BACKUP_JOB_FAILED", "BACKUP_JOB_EXPIRED", "RESTORE_JOB_FAILED", "COPY_JOB_FAILED"]
+resource "aws_cloudwatch_event_rule" "dlm_errors" {
+  name        = "${var.name}-dlm-errors"
+  description = "DLM snapshot policy entered an error state"
+  event_pattern = jsonencode({
+    source        = ["aws.dlm"]
+    "detail-type" = ["DLM Policy State Change"]
+    detail        = { state = ["ERROR"] }
+  })
+  tags = var.tags
+}
+
+resource "aws_cloudwatch_event_target" "dlm_errors" {
+  rule = aws_cloudwatch_event_rule.dlm_errors.name
+  arn  = aws_sns_topic.backup_events.arn
+}
+
+resource "aws_db_event_subscription" "rds_backup" {
+  count            = length(var.db_instance_ids) > 0 ? 1 : 0
+  name             = "${var.name}-rds-backup"
+  sns_topic        = aws_sns_topic.backup_events.arn
+  source_type      = "db-instance"
+  source_ids       = var.db_instance_ids
+  event_categories = ["backup", "failure", "recovery"]
+  tags             = var.tags
 }
 
 resource "aws_sns_topic_subscription" "email" {

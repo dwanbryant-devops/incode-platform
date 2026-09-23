@@ -50,8 +50,8 @@ module "rds" {
   vpc_security_group_ids = [aws_security_group.rds.id]
   publicly_accessible    = false
 
-  # Daily automated snapshots + point-in-time recovery. AWS Backup adds a separate
-  # vault with longer retention on top (see backup module).
+  # Daily automated snapshots + point-in-time recovery (5-minute RPO). This is the
+  # database backup; AWS Backup is blocked by an org SCP in this account.
   backup_retention_period = var.rds_backup_retention_days
   backup_window           = "03:00-04:00"
   maintenance_window      = "Sun:04:30-Sun:05:30"
@@ -74,10 +74,10 @@ module "rds" {
   parameters = [
     { name = "rds.force_ssl", value = "1" },
     { name = "log_min_duration_statement", value = "500" }, # log queries slower than 500ms
-    { name = "log_connections", value = "1" },
+    { name = "log_connections", value = "all" },            # Postgres 18: list of stages, not a boolean
     { name = "log_disconnections", value = "1" },
     { name = "shared_preload_libraries", value = "pg_stat_statements", apply_method = "pending-reboot" },
   ]
 
-  tags = merge(var.tags, { Backup = "daily" })
+  tags = var.tags
 }

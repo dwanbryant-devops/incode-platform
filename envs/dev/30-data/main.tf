@@ -84,12 +84,12 @@ module "data" {
 module "backup" {
   source = "../../../modules/backup"
 
-  name    = local.name
-  project = local.project
+  name             = local.name
+  target_tag_value = "${local.project}-daily" # set on PVs by the gp3 StorageClass
 
-  daily_retention_days    = 14
-  weekly_retention_days   = 35
-  protect_recovery_points = false
+  daily_retention_count  = 14
+  weekly_retention_count = 5
+  db_instance_ids        = [module.data.db_instance_identifier]
 }
 
 output "db_address" {
@@ -120,6 +120,6 @@ output "cache_replication_group_id" {
   value = module.data.cache_replication_group_id
 }
 
-output "backup_vault_name" {
-  value = module.backup.vault_name
+output "backup_events_topic_arn" {
+  value = module.backup.events_topic_arn
 }

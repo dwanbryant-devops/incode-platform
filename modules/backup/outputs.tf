@@ -1,9 +1,5 @@
-output "vault_name" {
-  value = aws_backup_vault.this.name
-}
-
-output "plan_id" {
-  value = aws_backup_plan.daily.id
+output "dlm_policy_id" {
+  value = aws_dlm_lifecycle_policy.ebs.id
 }
 
 output "events_topic_arn" {

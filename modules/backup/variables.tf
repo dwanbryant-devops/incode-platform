@@ -2,25 +2,31 @@ variable "name" {
   type = string
 }
 
-variable "project" {
-  description = "Selection only picks up resources with this Project tag, so other workloads in the account aren't swept in."
+variable "target_tag_key" {
+  description = "EBS volumes with this tag are snapshotted. The gp3 StorageClass in incode-gitops sets it on every PV."
+  type        = string
+  default     = "Backup"
+}
+
+variable "target_tag_value" {
+  description = "Project-specific value so other workloads in the account aren't swept in."
   type        = string
 }
 
-variable "daily_retention_days" {
+variable "daily_retention_count" {
   type    = number
   default = 14
 }
 
-variable "weekly_retention_days" {
+variable "weekly_retention_count" {
   type    = number
-  default = 35
+  default = 5
 }
 
-variable "protect_recovery_points" {
-  description = "When false, the vault can be destroyed with recovery points in it (useful for throwaway envs)."
-  type        = bool
-  default     = true
+variable "db_instance_ids" {
+  description = "RDS instances whose backup/failure events alert to the SNS topic."
+  type        = list(string)
+  default     = []
 }
 
 variable "alert_emails" {
