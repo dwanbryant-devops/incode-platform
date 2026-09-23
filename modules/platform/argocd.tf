@@ -82,6 +82,7 @@ resource "helm_release" "argocd_root" {
           repoURL        = var.gitops_repo_url
           targetRevision = var.gitops_revision
           path           = "bootstrap"
+          directory      = { recurse = true }
         }
         destination = {
           server    = "https://kubernetes.default.svc"

@@ -64,10 +64,12 @@ module "eks" {
     "arn:aws:iam::${local.account_id}:role/gha-tf-plan",
   ]
 
-  node_instance_types = ["t3.large"]
-  node_min_size       = 2
-  node_desired_size   = 2
-  node_max_size       = 5
+  # The account's SCP (DenyExpensiveEC2InstanceTypes) allows only t2/t3/t3a up to
+  # "medium". More, smaller nodes: one per AZ at minimum, autoscaled to 6.
+  node_instance_types = ["t3.medium", "t3a.medium"]
+  node_min_size       = 3
+  node_desired_size   = 3
+  node_max_size       = 6
 
   log_retention_days = 14
 }

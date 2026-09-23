@@ -33,6 +33,12 @@ variable "node_instance_types" {
   type = list(string)
 }
 
+variable "node_max_pods" {
+  description = "kubelet maxPods; with VPC CNI prefix delegation EKS recommends 110 for instances under 30 vCPUs."
+  type        = number
+  default     = 110
+}
+
 variable "node_capacity_type" {
   description = "ON_DEMAND or SPOT."
   type        = string

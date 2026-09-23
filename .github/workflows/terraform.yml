@@ -1,0 +1,137 @@
+# Infrastructure pipeline
+#   PR:        fmt/validate/tflint/checkov, then `terraform plan` for every stack using the
+#              read-only gha-tf-plan role. Plans are shown in the run summary.
+#   push main: plan again, then apply each stack in dependency order, only after a
+#              reviewer approves the `dev` GitHub Environment (gha-tf-apply role).
+# bootstrap/ is intentionally excluded: it creates the CI roles and is applied by a human.
+name: Terraform
+
+on:
+  pull_request:
+    branches: [main]
+    paths: ["envs/**", "global/**", "modules/**", ".github/workflows/terraform.yml", ".tflint.hcl"]
+  push:
+    branches: [main]
+    paths: ["envs/**", "global/**", "modules/**", ".github/workflows/terraform.yml", ".tflint.hcl"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Never run two pipelines against the same state at once.
+concurrency:
+  group: terraform-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  TF_VERSION: 1.14.3
+  AWS_REGION: us-east-1
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+
+jobs:
+  static:
+    name: fmt / validate / lint / security scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+      - run: terraform fmt -check -recursive -diff
+      - name: validate
+        run: |
+          for d in global/ecr envs/dev/*/; do
+            echo "::group::$d"
+            terraform -chdir="$d" init -backend=false >/dev/null
+            terraform -chdir="$d" validate
+            echo "::endgroup::"
+          done
+      - uses: terraform-linters/setup-tflint@v6
+      - name: tflint
+        run: |
+          tflint --init --config "$GITHUB_WORKSPACE/.tflint.hcl"
+          for d in global/ecr envs/dev/*/ modules/*/; do
+            tflint --chdir="$d" --config "$GITHUB_WORKSPACE/.tflint.hcl"
+          done
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: checkov
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: .
+          framework: terraform
+          quiet: true
+          # Findings are reported, not blocking: accepted risks are listed in the README.
+          soft_fail: true
+          output_format: cli
+
+  plan:
+    name: plan (${{ matrix.stack }})
+    needs: static
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        stack: [global/ecr, envs/dev/10-network, envs/dev/20-eks, envs/dev/30-data, envs/dev/40-platform]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_PLAN_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: init
+        run: terraform -chdir="${{ matrix.stack }}" init -backend-config=../backend.hcl
+      - name: plan
+        id: plan
+        run: |
+          set +e
+          terraform -chdir="${{ matrix.stack }}" plan -lock=false -detailed-exitcode -no-color -out=tfplan > plan.txt 2>&1
+          code=$?
+          cat plan.txt
+          {
+            echo "### \`${{ matrix.stack }}\`"
+            if [ $code -eq 0 ]; then echo "No changes."; else
+              echo '<details><summary>'"$(grep -E '^Plan:|^No changes|Error' plan.txt | head -1)"'</summary>'
+              echo; echo '```'; grep -vE 'Refreshing state|Reading\.\.\.|Read complete' plan.txt | tail -300; echo '```'; echo '</details>'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          [ $code -eq 1 ] && exit 1 || exit 0
+
+  apply:
+    name: apply (dev)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: plan
+    runs-on: ubuntu-latest
+    environment: dev # required reviewer; only main may deploy; OIDC sub = environment:dev
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_APPLY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 7200
+      # Layers are applied one after another so each one reads its dependencies'
+      # freshly applied outputs (a saved plan from the plan job could be stale).
+      - name: apply stacks in order
+        run: |
+          for stack in global/ecr envs/dev/10-network envs/dev/20-eks envs/dev/30-data envs/dev/40-platform; do
+            echo "::group::apply $stack"
+            terraform -chdir="$stack" init -backend-config=../backend.hcl
+            terraform -chdir="$stack" apply -auto-approve -no-color
+            echo "::endgroup::"
+          done

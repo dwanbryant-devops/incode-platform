@@ -117,6 +117,7 @@ module "platform" {
   argocd_apps_chart_version = "2.0.5"
 
   extra_cluster_annotations = {
+    vpc_cidr         = local.network.vpc_cidr
     db_host          = local.data.db_address
     db_port          = tostring(local.data.db_port)
     db_name          = local.data.db_name

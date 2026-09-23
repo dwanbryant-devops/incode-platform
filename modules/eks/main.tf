@@ -54,8 +54,16 @@ module "eks" {
   addons = {
     vpc-cni = {
       before_compute = true
-      # Enables Kubernetes NetworkPolicy enforcement, used to isolate the app tiers.
-      configuration_values = jsonencode({ enableNetworkPolicy = "true" })
+      configuration_values = jsonencode({
+        # Kubernetes NetworkPolicy enforcement, used to isolate the app tiers.
+        enableNetworkPolicy = "true"
+        env = {
+          # Assign /28 prefixes instead of single IPs: small instances get ~110 pod
+          # slots instead of 17 (t3.medium), so density is limited by CPU/memory, not ENIs.
+          ENABLE_PREFIX_DELEGATION = "true"
+          WARM_PREFIX_TARGET       = "1"
+        }
+      })
     }
     coredns    = {}
     kube-proxy = {}
@@ -86,6 +94,19 @@ module "eks" {
           }
         }
       }
+
+      # With prefix delegation the kubelet must be told it can run more pods.
+      cloudinit_pre_nodeadm = [{
+        content_type = "application/node.eks.aws"
+        content      = <<-EOT
+          apiVersion: node.eks.aws/v1alpha1
+          kind: NodeConfig
+          spec:
+            kubelet:
+              config:
+                maxPods: ${var.node_max_pods}
+        EOT
+      }]
 
       labels = { role = "general" }
 
