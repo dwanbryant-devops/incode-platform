@@ -22,6 +22,21 @@ resource "aws_vpc_security_group_ingress_rule" "cache_from_eks" {
   ip_protocol                  = "tcp"
 }
 
+# Own parameter group (the default one can't be modified). As a pure cache, evict
+# least-recently-used keys when full instead of rejecting writes.
+resource "aws_elasticache_parameter_group" "cache" {
+  count  = var.enable_cache ? 1 : 0
+  name   = "${var.name}-valkey8"
+  family = "valkey8"
+
+  parameter {
+    name  = "maxmemory-policy"
+    value = "allkeys-lru"
+  }
+
+  tags = var.tags
+}
+
 resource "aws_elasticache_subnet_group" "cache" {
   count      = var.enable_cache ? 1 : 0
   name       = "${var.name}-cache"
@@ -63,7 +78,7 @@ resource "aws_elasticache_replication_group" "cache" {
 
   engine               = "valkey"
   engine_version       = "8.1"
-  parameter_group_name = "default.valkey8"
+  parameter_group_name = aws_elasticache_parameter_group.cache[0].name
   node_type            = var.cache_node_type
   port                 = 6379
 
