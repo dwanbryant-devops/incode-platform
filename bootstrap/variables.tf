@@ -13,6 +13,22 @@ variable "github_org" {
   default = "dwanbryant-devops"
 }
 
+variable "github_owner_id" {
+  description = "Immutable numeric ID of the GitHub owner (gh api users/<org> --jq .id)."
+  type        = number
+  default     = 332991340
+}
+
+variable "github_repo_ids" {
+  description = "Immutable numeric repo IDs (gh api repos/<org>/<repo> --jq .id). GitHub's OIDC sub claim includes them."
+  type        = map(number)
+  default = {
+    "incode-platform"                  = 1383886992
+    "golang-gin-realworld-example-app" = 1383921949
+    "angular-realworld-example-app"    = 1383920665
+  }
+}
+
 variable "platform_repo" {
   description = "Repo that runs Terraform plan/apply."
   type        = string

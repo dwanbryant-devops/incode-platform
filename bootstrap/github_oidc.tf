@@ -1,6 +1,12 @@
 locals {
-  oidc_host     = "token.actions.githubusercontent.com"
-  platform_repo = "${var.github_org}/${var.platform_repo}"
+  oidc_host = "token.actions.githubusercontent.com"
+
+  # GitHub's `sub` claim identifies the repo as owner@ownerID/repo@repoID. Pinning the
+  # immutable IDs means a deleted-and-recreated repo (or a renamed org) with the same name
+  # can't assume these roles.
+  repo_sub = { for repo, id in var.github_repo_ids : repo => "repo:${var.github_org}@${var.github_owner_id}/${repo}@${id}" }
+
+  platform_repo = local.repo_sub[var.platform_repo]
 }
 
 # AWS validates GitHub's OIDC certificate chain itself, so no thumbprint is needed.
@@ -13,10 +19,10 @@ resource "aws_iam_openid_connect_provider" "github" {
 data "aws_iam_policy_document" "trust" {
   for_each = merge(
     {
-      tf-plan  = ["repo:${local.platform_repo}:pull_request", "repo:${local.platform_repo}:ref:refs/heads/main"]
-      tf-apply = [for e in var.apply_environments : "repo:${local.platform_repo}:environment:${e}"]
+      tf-plan  = ["${local.platform_repo}:pull_request", "${local.platform_repo}:ref:refs/heads/main"]
+      tf-apply = [for e in var.apply_environments : "${local.platform_repo}:environment:${e}"]
     },
-    { for repo, _ in var.image_repos : "ecr-push-${repo}" => ["repo:${var.github_org}/${repo}:environment:${var.image_push_environment}"] },
+    { for repo, _ in var.image_repos : "ecr-push-${repo}" => ["${local.repo_sub[repo]}:environment:${var.image_push_environment}"] },
   )
 
   statement {
