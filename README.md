@@ -122,7 +122,7 @@ After step 2, Argo CD installs every add-on on its own. The app goes live once t
 flowchart LR
   pr[PR in app repo] --> t[unit tests<br/>govulncheck / format]
   pr --> i[image build<br/>Trivy HIGH/CRIT gate]
-  i --> at[API tests: RealWorld Hurl spec<br/>vs image + Postgres]
+  i --> at[API tests: RealWorld suite<br/>vs image + Postgres]
   i --> perf[k6: PR build vs base build<br/>fail if p95 +25%]
   merge[merge to main] --> push[ECR push via OIDC<br/>env: dev, main only]
   push --> bump[commit tag to incode-gitops]
@@ -131,7 +131,7 @@ flowchart LR
 
 - **App pipelines** ([API](https://github.com/dwanbryant-devops/golang-gin-realworld-example-app/blob/main/.github/workflows/ci.yml), [UI](https://github.com/dwanbryant-devops/angular-realworld-example-app/blob/main/.github/workflows/ci.yml)):
   - Test, build **one** image, and scan it.
-  - The API image is integration-tested with the official RealWorld API spec (Hurl, 174 requests, pinned commit) against a real Postgres.
+  - The API image is integration-tested with the official RealWorld API suite against a real Postgres. The suite is pinned to the spec version the app implements.
   - On `main`, the same image is pushed to ECR with an immutable `<git-sha>` tag, and the tag is committed to incode-gitops.
 - **Performance regression detection** (bonus): on each API PR, CI builds the base branch and the PR branch, load-tests each with k6 against a fresh Postgres on the same runner, and fails if any endpoint's p95 regresses more than 25% (and more than 5 ms). Comparing both builds on one runner cancels out runner-speed noise, which makes the check reliable enough to block merges.
 - **Infra pipeline** ([.github/workflows/terraform.yml](.github/workflows/terraform.yml)):
@@ -212,6 +212,7 @@ DLM policy errors (via EventBridge) and RDS backup, failure and recovery events 
 - **`gha-tf-apply` has AdministratorAccess**, guarded by an approval gate and explicit denies. Least privilege would mean per-layer apply roles with scoped policies, plus a permissions boundary on every role Terraform creates.
 - **The app uses the RDS master user.** It should get its own least-privilege Postgres role, created by a migration job or the `postgresql` Terraform provider. RDS master-password rotation is off because pods read the secret at startup; enabling it needs Reloader, or `rotation` combined with a dual-user strategy.
 - **The cache auth token lives in Terraform state.** The state is encrypted with restricted access, but ElastiCache has no managed-password option. The fix is IAM authentication for Valkey.
+- **The API implements the pre-2026 RealWorld spec.** The upstream spec's "v2" (Hurl suite) changes some response shapes and error formats that the upstream Go app predates, so CI pins the API tests to the matching older suite. Adopting v2 is app work: switch CI to the Hurl suite and fix the failing assertions.
 - **Schema migrations run in-app** (GORM AutoMigrate on startup). That's fine at this scale; I'd move to versioned migrations run as an Argo CD PreSync Job.
 - **No WAF or rate limiting** on the ALB. I'd add AWS WAF with managed rule groups.
 - **Alertmanager has no receiver configured.** Alerts fire, but don't page anyone yet. I'd wire it to Slack or PagerDuty, and add CloudWatch alarms for RDS CPU, storage and connections.
