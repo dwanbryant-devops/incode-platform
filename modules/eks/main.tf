@@ -46,6 +46,10 @@ module "eks" {
   access_entries                           = merge(local.admin_entries, local.viewer_entries)
 
   # Control-plane logs to CloudWatch; Kubernetes Secrets envelope-encrypted with a module-managed KMS key.
+  # Explicit key admins; the module default is "whoever runs terraform", which flips the
+  # key policy between a laptop and CI on every apply.
+  kms_key_administrators = var.cluster_admin_role_arns
+
   enabled_log_types                      = ["api", "audit", "authenticator", "controllerManager", "scheduler"]
   cloudwatch_log_group_retention_in_days = var.log_retention_days
 
