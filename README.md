@@ -122,7 +122,7 @@ After step 2, Argo CD installs every add-on on its own. The app goes live once t
 flowchart LR
   pr[PR in app repo] --> t[unit tests<br/>govulncheck / format]
   pr --> i[image build<br/>Trivy HIGH/CRIT gate]
-  i --> at[API tests: Postman suite<br/>vs image + Postgres]
+  i --> at[API tests: RealWorld Hurl spec<br/>vs image + Postgres]
   i --> perf[k6: PR build vs base build<br/>fail if p95 +25%]
   merge[merge to main] --> push[ECR push via OIDC<br/>env: dev, main only]
   push --> bump[commit tag to incode-gitops]
@@ -131,7 +131,7 @@ flowchart LR
 
 - **App pipelines** ([API](https://github.com/dwanbryant-devops/golang-gin-realworld-example-app/blob/main/.github/workflows/ci.yml), [UI](https://github.com/dwanbryant-devops/angular-realworld-example-app/blob/main/.github/workflows/ci.yml)):
   - Test, build **one** image, and scan it.
-  - The API image is integration-tested with the official RealWorld Postman suite against a real Postgres.
+  - The API image is integration-tested with the official RealWorld API spec (Hurl, 174 requests, pinned commit) against a real Postgres.
   - On `main`, the same image is pushed to ECR with an immutable `<git-sha>` tag, and the tag is committed to incode-gitops.
 - **Performance regression detection** (bonus): on each API PR, CI builds the base branch and the PR branch, load-tests each with k6 against a fresh Postgres on the same runner, and fails if any endpoint's p95 regresses more than 25% (and more than 5 ms). Comparing both builds on one runner cancels out runner-speed noise, which makes the check reliable enough to block merges.
 - **Infra pipeline** ([.github/workflows/terraform.yml](.github/workflows/terraform.yml)):

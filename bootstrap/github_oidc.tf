@@ -72,6 +72,14 @@ data "aws_iam_policy_document" "tf_plan_state" {
     actions   = ["s3:PutObject", "s3:DeleteObject"]
     resources = ["${aws_s3_bucket.tfstate.arn}/*.tflock"]
   }
+  # Refreshing aws_secretsmanager_secret_version reads the value. Only the Terraform-generated
+  # cache token qualifies, and it's already in state (readable above), so no new exposure.
+  # The RDS master secret is managed by RDS, not Terraform, and stays unreadable.
+  statement {
+    sid       = "RefreshTerraformManagedSecrets"
+    actions   = ["secretsmanager:GetSecretValue"]
+    resources = ["arn:aws:secretsmanager:${var.region}:${local.account_id}:secret:${var.project}-*/cache-*"]
+  }
 }
 
 resource "aws_iam_role_policy" "tf_plan_state" {

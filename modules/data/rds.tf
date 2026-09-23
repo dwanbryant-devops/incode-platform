@@ -72,9 +72,9 @@ module "rds" {
   cloudwatch_log_group_retention_in_days = var.log_retention_days
 
   parameters = [
-    { name = "rds.force_ssl", value = "1" },
-    { name = "log_min_duration_statement", value = "500" }, # log queries slower than 500ms
-    { name = "log_connections", value = "all" },            # Postgres 18: list of stages, not a boolean
+    { name = "rds.force_ssl", value = "1", apply_method = "pending-reboot" }, # as RDS records it; avoids a perpetual diff
+    { name = "log_min_duration_statement", value = "500" },                   # log queries slower than 500ms
+    { name = "log_connections", value = "all" },                              # Postgres 18: list of stages, not a boolean
     { name = "log_disconnections", value = "1" },
     { name = "shared_preload_libraries", value = "pg_stat_statements", apply_method = "pending-reboot" },
   ]
